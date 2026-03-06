@@ -1,5 +1,5 @@
 import { createApp, startApp, logger } from '@leasebase/service-common';
-import { createProxyMiddleware, type Options } from 'http-proxy-middleware';
+import { createProxyMiddleware, fixRequestBody, type Options } from 'http-proxy-middleware';
 
 const app = createApp();
 
@@ -40,6 +40,8 @@ function createProxy(service: string, pathPrefix: string, targetPathPrefix: stri
     pathRewrite: { '^/': `${targetPathPrefix}/` },
     on: {
       proxyReq: (proxyReq, req) => {
+        // Re-stream the body that express.json() already consumed
+        fixRequestBody(proxyReq, req);
         // Forward correlation ID
         const correlationId = (req as any).correlationId;
         if (correlationId) {
