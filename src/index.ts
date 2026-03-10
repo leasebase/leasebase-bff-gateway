@@ -240,6 +240,9 @@ createProxy('auth', '/api/auth', '/internal/auth');
 createProxy('properties', '/api/pm', '/internal/pm');
 createProxy('properties', '/api/properties', '/internal/properties');
 createProxy('leases', '/api/leases', '/internal/leases');
+// Tenant invitation accept routes — public, no auth required.
+// Mounted before the general /api/tenants proxy for specificity.
+createProxy('tenants', '/api/tenants/invitations/accept', '/internal/tenants/invitations/accept');
 createProxy('tenants', '/api/tenants', '/internal/tenants');
 createProxy('maintenance', '/api/maintenance', '/internal/maintenance');
 createProxy('payments', '/api/payments', '/internal/payments');
