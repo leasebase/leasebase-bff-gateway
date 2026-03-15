@@ -151,6 +151,28 @@ const webhookProxy = createProxyMiddleware({
 app.use('/api/payments/webhooks', webhookProxy);
 logger.info('Webhook proxy route registered: /api/payments/webhooks → payments-service');
 
+// ── LEASE_TRACE: temporary diagnostic middleware ──────────────────────────
+app.use('/api/leases', (req, _res, next) => {
+  if (req.method === 'POST' && (req.path === '/' || req.path === '')) {
+    logger.info(
+      {
+        LEASE_TRACE: true,
+        phase: 'bff-proxy-entry',
+        method: req.method,
+        path: req.originalUrl,
+        correlationId: (req as any).correlationId,
+        hasAuth: !!req.headers.authorization,
+        contentType: req.headers['content-type'],
+        bodyKeys: req.body ? Object.keys(req.body) : [],
+        bodyPropertyId: req.body?.propertyId,
+        bodyUnitId: req.body?.unitId,
+      },
+      'LEASE_TRACE: POST /api/leases received at BFF',
+    );
+  }
+  next();
+});
+
 // Register proxy routes (order matters — more specific first)
 createProxy('auth', '/api/auth', '/internal/auth');
 createProxy('properties', '/api/properties', '/internal/properties');
