@@ -75,6 +75,11 @@ function createProxy(service: string, pathPrefix: string, targetPathPrefix: stri
         if (auth) {
           proxyReq.setHeader('Authorization', auth);
         }
+        // Forward multi-lease org context header
+        const orgCtx = req.headers['x-org-context'];
+        if (orgCtx) {
+          proxyReq.setHeader('X-Org-Context', orgCtx as string);
+        }
         // Forward dev bypass headers (only in non-production; stripped by middleware otherwise)
         if (!IS_PRODUCTION) {
           for (const h of DEV_BYPASS_HEADERS) {
