@@ -3,7 +3,32 @@ import { createProxyMiddleware, fixRequestBody, type Options } from 'http-proxy-
 
 const app = createApp();
 
-// Internal ALB URL — in ECS, services communicate via the ALB.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+// Fail fast: DEV_AUTH_BYPASS must never be enabled in production
+if (IS_PRODUCTION && process.env.DEV_AUTH_BYPASS === 'true') {
+  logger.fatal('DEV_AUTH_BYPASS=true is not allowed when NODE_ENV=production — aborting');
+  process.exit(1);
+}
+
+if (!IS_PRODUCTION && process.env.DEV_AUTH_BYPASS === 'true') {
+  logger.warn('⚠ DEV_AUTH_BYPASS is enabled — auth bypass headers will be forwarded. Do NOT use in production.');
+}
+
+// Dev bypass header names
+const DEV_BYPASS_HEADERS = ['x-dev-user-email', 'x-dev-user-role', 'x-dev-org-id'];
+
+// Strip dev bypass headers in production/non-dev environments
+if (IS_PRODUCTION) {
+  app.use((req, _res, next) => {
+    for (const h of DEV_BYPASS_HEADERS) {
+      delete req.headers[h];
+    }
+    next();
+  });
+}
+
+// Internal ALB URL
 // For local dev, each service runs on a different port.
 const ALB_URL = process.env.INTERNAL_ALB_URL || 'http://localhost';
 
@@ -50,12 +75,19 @@ function createProxy(service: string, pathPrefix: string, targetPathPrefix: stri
         if (auth) {
           proxyReq.setHeader('Authorization', auth);
         }
-        // Forward dev bypass headers
-        for (const h of ['x-dev-user-email', 'x-dev-user-role', 'x-dev-org-id']) {
-          const val = req.headers[h];
-          if (val) proxyReq.setHeader(h, val as string);
+        // Forward multi-lease org context header
+        const orgCtx = req.headers['x-org-context'];
+        if (orgCtx) {
+          proxyReq.setHeader('X-Org-Context', orgCtx as string);
         }
-        // Re-stream the body that express.json() already consumed.
+        // Forward dev bypass headers (only in non-production; stripped by middleware otherwise)
+        if (!IS_PRODUCTION) {
+          for (const h of DEV_BYPASS_HEADERS) {
+            const val = req.headers[h];
+            if (val) proxyReq.setHeader(h, val as string);
+          }
+        }
+        // Re-stream the body
         // MUST be called after all setHeader() calls, since it writes
         // the body which flushes the headers.
         fixRequestBody(proxyReq, req);
@@ -76,10 +108,61 @@ function createProxy(service: string, pathPrefix: string, targetPathPrefix: stri
   logger.info({ service, pathPrefix, targetPathPrefix }, `Proxy route registered`);
 }
 
+// ── Stripe webhook proxy (raw body passthrough) ─────────────────────────────
+// Webhook paths must forward the raw body intact for Stripe signature verification.
+// The standard proxy uses fixRequestBody which re-serializes parsed JSON — that
+// breaks signature verification. This dedicated proxy streams the raw body.
+const webhookProxy = createProxyMiddleware({
+  target: getTarget('payments'),
+  changeOrigin: true,
+  pathRewrite: { '^/': '/internal/payments/' },
+  on: {
+    proxyReq: (proxyReq, req) => {
+      const correlationId = (req as any).correlationId;
+      if (correlationId) proxyReq.setHeader('x-correlation-id', correlationId);
+      // Forward stripe-signature header (critical for verification)
+      const sig = req.headers['stripe-signature'];
+      if (sig) proxyReq.setHeader('stripe-signature', sig as string);
+      // Do NOT call fixRequestBody — let the raw body stream through.
+      // The raw body is already available because express.json() stored it
+      // and we need to re-stream it from req (the original readable stream
+      // is consumed by express.json). We write the raw buffer directly.
+      const body = (req as any).body;
+      if (body && Buffer.isBuffer(body)) {
+        proxyReq.setHeader('Content-Length', body.length.toString());
+        proxyReq.write(body);
+        proxyReq.end();
+      } else if (body) {
+        // Fallback: re-serialize (may break signature, but prevents hang)
+        const bodyStr = JSON.stringify(body);
+        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyStr).toString());
+        proxyReq.write(bodyStr);
+        proxyReq.end();
+      }
+    },
+    error: (err, _req, res) => {
+      logger.error({ err }, 'Webhook proxy error');
+      if ('writeHead' in res && typeof res.writeHead === 'function') {
+        (res as any).writeHead(502);
+        (res as any).end(JSON.stringify({
+          error: { code: 'BAD_GATEWAY', message: 'Payments webhook service unavailable' },
+        }));
+      }
+    },
+  },
+});
+
+// Mount webhook proxy BEFORE the general payments proxy (more specific first)
+app.use('/api/payments/webhooks', webhookProxy);
+logger.info('Webhook proxy route registered: /api/payments/webhooks → payments-service');
+
 // Register proxy routes (order matters — more specific first)
 createProxy('auth', '/api/auth', '/internal/auth');
 createProxy('properties', '/api/properties', '/internal/properties');
 createProxy('leases', '/api/leases', '/internal/leases');
+// Tenant invitation accept routes — public, no auth required.
+// Mounted before the general /api/tenants proxy for specificity.
+createProxy('tenants', '/api/tenants/invitations/accept', '/internal/tenants/invitations/accept');
 createProxy('tenants', '/api/tenants', '/internal/tenants');
 createProxy('maintenance', '/api/maintenance', '/internal/maintenance');
 createProxy('payments', '/api/payments', '/internal/payments');
