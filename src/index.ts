@@ -190,6 +190,55 @@ createProxy('notifications', '/api/notifications', '/internal/notifications');
 // It uses X-Internal-Service-Key and is NOT reachable via /api/documents.
 createProxy('documents', '/api/documents', '/internal/documents');
 
+// ── E-sign provider webhook proxy (raw body passthrough) — Phase 3 ────────────
+// Provider webhooks require raw body intact for HMAC signature verification.
+// Route: POST /api/webhooks/esign/:provider  →  document-service POST /webhooks/esign/:provider
+// HMAC verification happens inside document-service; no auth header forwarded.
+const esignWebhookProxy = createProxyMiddleware({
+  target: getTarget('documents'),
+  changeOrigin: true,
+  pathRewrite: { '^/api/webhooks/esign': '/webhooks/esign' },
+  on: {
+    proxyReq: (proxyReq, req) => {
+      const correlationId = (req as any).correlationId;
+      if (correlationId) proxyReq.setHeader('x-correlation-id', correlationId);
+      // Forward provider signature header(s) — required for HMAC verification
+      const hsSig = req.headers['x-hellosign-signature'];
+      if (hsSig) proxyReq.setHeader('X-HelloSign-Signature', hsSig as string);
+      // Stream raw body (not re-serialized — same approach as Stripe webhook)
+      const body = (req as any).body;
+      if (body && Buffer.isBuffer(body)) {
+        proxyReq.setHeader('Content-Length', body.length.toString());
+        proxyReq.write(body);
+        proxyReq.end();
+      } else if (typeof body === 'string') {
+        const buf = Buffer.from(body);
+        proxyReq.setHeader('Content-Length', buf.length.toString());
+        proxyReq.write(buf);
+        proxyReq.end();
+      } else if (body) {
+        const bodyStr = JSON.stringify(body);
+        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyStr).toString());
+        proxyReq.write(bodyStr);
+        proxyReq.end();
+      }
+    },
+    error: (err, _req, res) => {
+      logger.error({ err }, 'E-sign webhook proxy error');
+      if ('writeHead' in res && typeof res.writeHead === 'function') {
+        (res as any).writeHead(502);
+        (res as any).end(JSON.stringify({
+          error: { code: 'BAD_GATEWAY', message: 'Document service webhook unavailable' },
+        }));
+      }
+    },
+  },
+});
+
+// Mount BEFORE the general /api/documents proxy (more specific first)
+app.use('/api/webhooks/esign', esignWebhookProxy);
+logger.info('Webhook proxy registered: /api/webhooks/esign → document-service /webhooks/esign');
+
 createProxy('reports', '/api/reports', '/internal/reports');
 
 startApp(app);
