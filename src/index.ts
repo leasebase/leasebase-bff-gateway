@@ -159,15 +159,37 @@ logger.info('Webhook proxy route registered: /api/payments/webhooks → payments
 // Register proxy routes (order matters — more specific first)
 createProxy('auth', '/api/auth', '/internal/auth');
 createProxy('properties', '/api/properties', '/internal/properties');
+
+// ── Lease service routes ───────────────────────────────────────────────────────────
+// The generic /api/leases proxy covers all lease endpoints including:
+//   POST /api/leases/:id/activate  (tenancy lifecycle — Stage 4 activation)
+//   POST /api/leases/:id/deactivate
+//   POST /api/leases/:id/extend
+//   POST /api/leases/:id/renew
+//   POST /api/leases/:id/tenants
+// No special proxy config needed for the activation endpoint.
 createProxy('leases', '/api/leases', '/internal/leases');
-// Tenant invitation accept routes — public, no auth required.
+
+// ── Tenant invitation accept routes (public, no auth required) ──────────────
 // Mounted before the general /api/tenants proxy for specificity.
+// Public invite acceptance (GET+POST /accept) does not require a JWT.
 createProxy('tenants', '/api/tenants/invitations/accept', '/internal/tenants/invitations/accept');
 createProxy('tenants', '/api/tenants', '/internal/tenants');
 createProxy('maintenance', '/api/maintenance', '/internal/maintenance');
 createProxy('payments', '/api/payments', '/internal/payments');
 createProxy('notifications', '/api/notifications', '/internal/notifications');
+
+// ── Document service routes ───────────────────────────────────────────────────────
+// The generic /api/documents proxy covers all document endpoints including:
+//   POST /api/documents/upload                  (create with status=UPLOADED)
+//   POST /api/documents/:id/confirm             (mark EXECUTED/CONFIRMED_EXTERNAL)
+//   GET  /api/documents?relatedType=LEASE&...   (list lease documents)
+//
+// IMPORTANT: GET /internal/documents/lease-proof is an internal S2S endpoint
+// called by lease-service directly (not proxied through BFF/public API).
+// It uses X-Internal-Service-Key and is NOT reachable via /api/documents.
 createProxy('documents', '/api/documents', '/internal/documents');
+
 createProxy('reports', '/api/reports', '/internal/reports');
 
 startApp(app);
