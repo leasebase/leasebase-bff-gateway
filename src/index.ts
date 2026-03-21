@@ -157,6 +157,7 @@ app.use('/api/payments/webhooks', webhookProxy);
 logger.info('Webhook proxy route registered: /api/payments/webhooks → payments-service');
 
 // Register proxy routes (order matters — more specific first)
+createProxy('auth', '/api/settings', '/internal/settings');
 createProxy('auth', '/api/profile', '/internal/profile');
 createProxy('auth', '/api/auth', '/internal/auth');
 createProxy('properties', '/api/properties', '/internal/properties');
