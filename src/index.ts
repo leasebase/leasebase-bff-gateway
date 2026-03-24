@@ -115,7 +115,7 @@ function createProxy(service: string, pathPrefix: string, targetPathPrefix: stri
 const webhookProxy = createProxyMiddleware({
   target: getTarget('payments'),
   changeOrigin: true,
-  pathRewrite: { '^/': '/internal/payments/' },
+  pathRewrite: { '^/': '/internal/payments/webhooks/' },
   on: {
     proxyReq: (proxyReq, req) => {
       const correlationId = (req as any).correlationId;
